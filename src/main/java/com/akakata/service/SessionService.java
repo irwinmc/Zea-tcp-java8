@@ -1,0 +1,457 @@
+package com.akakata.service;
+
+import com.akakata.app.PlayerSession;
+import com.akakata.app.Session;
+import com.akakata.app.impl.DefaultSession;
+import com.akakata.communication.impl.SocketMessageSender;
+import com.akakata.security.Credentials;
+import com.akakata.security.CredentialsVerifier;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.benmanes.caffeine.cache.stats.CacheStats;
+import io.netty.buffer.ByteBuf;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Owns player sessions with atomic credential-slot admission and explicit lifecycle cleanup.
+ *
+ * <p>The default admission limit is 10,000 credentials. Full capacity rejects new
+ * credentials and never evicts existing players. Reconnecting an existing credential
+ * reuses its slot. Online sessions have no cache TTL; transport idle handling and
+ * explicit session closure determine their lifetime. Cache statistics are recorded.
+ *
+ * <p>Registration takes the session monitor before the service monitor. Resource
+ * cleanup runs outside the service monitor. Identity-based ownership tracks sessions
+ * awaiting asynchronous removal callbacks, and close listeners remove default
+ * sessions without deleting newer replacements for the same credential key.
+ *
+ * @author Kelvin
+ * @since 0.7.8
+ */
+public class SessionService {
+
+    /**
+     * Logger for component lifecycle and diagnostic messages.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(SessionService.class);
+
+    /**
+     * Default number of simultaneously registered credential slots.
+     */
+    public static final int DEFAULT_MAXIMUM_SESSIONS = 10_000;
+
+    /**
+     * Admission budget checked atomically with registry publication.
+     */
+    private final int maximumSessions;
+
+    /**
+     * Credential-keyed registry cache with statistics and removal notifications.
+     */
+    private final Cache<Credentials, PlayerSession> sessions;
+
+    /**
+     * Credential verifier supplied by the application.
+     */
+    private final CredentialsVerifier verifier;
+
+    /**
+     * Optional scheduler that runs registry-cache maintenance during idle periods.
+     */
+    private final ScheduledExecutorService cleanupExecutor;
+
+    /**
+     * Terminal lifecycle flag, published when shutdown begins.
+     */
+    private volatile boolean closed = false;
+
+    // Include removed sessions whose asynchronous Caffeine cleanup has not completed yet.
+    // Guarded by this, with identity semantics matching each resource's lifecycle.
+
+    /**
+     * Identity-based ownership set including entries awaiting asynchronous removal cleanup; guarded
+     * by this service.
+     */
+    private final Set<PlayerSession> ownedSessions = Collections.newSetFromMap(new IdentityHashMap<>());
+
+    /**
+     * Creates the session cache with optional periodic cleanup. The one-argument overload enables
+     * cleanup.
+     *
+     * @param verifier              the credential verifier
+     * @param enablePeriodicCleanup whether to schedule cache cleanup every minute
+     */
+    public SessionService(CredentialsVerifier verifier, boolean enablePeriodicCleanup) {
+        this(verifier, enablePeriodicCleanup, DEFAULT_MAXIMUM_SESSIONS);
+    }
+
+    /**
+     * Creates a registry with a strict credential-slot budget and optional maintenance.
+     *
+     * @param verifier              the credential verifier
+     * @param enablePeriodicCleanup whether to run cache maintenance every minute
+     * @param maximumSessions       the positive number of admitted credentials
+     * @throws IllegalArgumentException if the admission limit is not positive
+     */
+    public SessionService(CredentialsVerifier verifier, boolean enablePeriodicCleanup, int maximumSessions) {
+        if (maximumSessions <= 0) {
+            throw new IllegalArgumentException("Maximum sessions must be positive");
+        }
+        this.verifier = verifier;
+        this.maximumSessions = maximumSessions;
+
+        this.sessions = Caffeine.newBuilder()
+                // Online players are never evicted by cache size or cache-access age.
+                .removalListener(this::onSessionRemoved)
+                .recordStats()
+                .build();
+
+        // 可选的定期清理
+        if (enablePeriodicCleanup) {
+            this.cleanupExecutor = Executors.newScheduledThreadPool(1,
+                    com.akakata.compat.Java8.threadFactory("session-cleanup-", 0, true));
+            this.cleanupExecutor.scheduleAtFixedRate(
+                    sessions::cleanUp,
+                    1, 1, TimeUnit.MINUTES
+            );
+            LOG.info("SessionService initialized with periodic cleanup enabled");
+        } else {
+            this.cleanupExecutor = null;
+            LOG.info("SessionService initialized (periodic cleanup disabled)");
+        }
+    }
+
+    /**
+     * Creates the session cache with optional periodic cleanup. The one-argument overload enables
+     * cleanup.
+     *
+     * @param verifier the credential verifier
+     */
+    public SessionService(CredentialsVerifier verifier) {
+        this(verifier, true);
+    }
+
+    /**
+     * Handles registry-cache removal notifications while registration owns replacement cleanup.
+     * The configured registry has no expiration or size-based eviction policy.
+     *
+     * @param credentials the verified credential identity
+     * @param session     the session associated with the operation
+     * @param cause       the failure or cache-removal cause
+     */
+    private void onSessionRemoved(Credentials credentials, PlayerSession session, RemovalCause cause) {
+        if (session == null || session.isShuttingDown()) {
+            return;
+        }
+
+        LOG.info("Session removed: cause={}, sessionId={}", cause, session.getId());
+
+        switch (cause) {
+            case EXPIRED:
+            case SIZE: {
+                cleanupSync(session);
+                break;
+            }
+            case REPLACED: {
+                // 避免双重清理问题
+                LOG.debug("Session replaced, cleanup handled by replaceSession()");
+                break;
+            }
+            case EXPLICIT: {
+                // 手动删除：同步清理
+                LOG.debug("Performing sync cleanup for session: {}", session.getId());
+                cleanupSync(session);
+                break;
+            }
+        }
+    }
+
+    /**
+     * Closes a session, closes an active socket transport as a fallback and removes its ownership
+     * record. Cleanup failures are logged.
+     *
+     * @param session the session associated with the operation
+     */
+    private void cleanupSync(PlayerSession session) {
+        com.akakata.communication.MessageSender sender = session.getSender();
+        try {
+            // 1. 关闭会话（清理 EventHandler、释放资源等）
+            session.close();
+
+            LOG.debug("Session cleaned up synchronously: sessionId={}", session.getId());
+        } catch (Exception e) {
+            LOG.error("Failed to cleanup session synchronously: sessionId={}", session.getId(), e);
+        } finally {
+            // Keep the original sender: close() may detach it even when cleanup throws.
+            SocketMessageSender java8Pattern38;
+            if (((java8Pattern38 = com.akakata.compat.Java8.cast(sender, SocketMessageSender.class)) != null)) {
+                io.netty.channel.Channel channel = java8Pattern38.getChannel();
+                if (channel != null && channel.isActive()) {
+                    channel.close();
+                }
+            }
+            synchronized (this) {
+                ownedSessions.remove(session);
+            }
+        }
+    }
+
+    /**
+     * Removes a closed session from ownership and deletes its cache entry only if it still refers
+     * to that instance.
+     *
+     * @param credentials the verified credential identity
+     * @param session     the session associated with the operation
+     */
+    private void onSessionClosed(Credentials credentials, PlayerSession session) {
+        synchronized (this) {
+            // A delayed close from an old login must never remove its replacement.
+            sessions.asMap().computeIfPresent(credentials, (key, current) -> current == session ? null : current);
+            ownedSessions.remove(session);
+        }
+    }
+
+    // ==================== 公共方法 ====================
+
+    /**
+     * Invokes the configured credential verifier without taking ownership of the login buffer.
+     *
+     * @param byteBuf the borrowed login payload buffer
+     * @return the verifier's credential result
+     */
+    public Credentials verify(ByteBuf byteBuf) {
+        try {
+            return verifier.verify(byteBuf);
+        } catch (Exception e) {
+            LOG.error("Failed to verify credentials", e);
+            return null;
+        }
+    }
+
+    /**
+     * Looks up the session currently registered for the credential and records cache statistics.
+     *
+     * @param key the attribute or cache key
+     * @return the cached session, or {@code null} if absent
+     */
+    public PlayerSession getSession(Credentials key) {
+        return sessions.getIfPresent(key);
+    }
+
+    /**
+     * Registers a player session and closes any distinct previous session for the key.
+     *
+     * <p>Invalid arguments, nonplayer sessions and closed resources are rejected.
+     *
+     * @param key     the attribute or cache key
+     * @param session the session associated with the operation
+     * @return {@code true} if registration succeeds; {@code false} if the input or lifecycle state
+     * is invalid
+     */
+    public boolean putSession(Credentials key, Session session) {
+        PlayerSession java8Pattern39;
+        if (key == null || !(((java8Pattern39 = com.akakata.compat.Java8.cast(session, PlayerSession.class)) != null))) {
+            return false;
+        }
+        try {
+            registerSession(key, java8Pattern39);
+            return true;
+        } catch (IllegalStateException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Removes a cached entry and synchronously releases its session.
+     *
+     * <p>The overload with an expected session removes the entry only if its current
+     * value is that exact instance, preventing stale callbacks from deleting replacements.
+     *
+     * @param key the attribute or cache key
+     * @return {@code true} if an entry was removed
+     */
+    public boolean removeSession(Credentials key) {
+        PlayerSession removed;
+        synchronized (this) {
+            removed = sessions.asMap().remove(key);
+        }
+        if (removed == null) {
+            return false;
+        }
+        cleanupSync(removed);
+        return true;
+    }
+
+    /**
+     * Removes a cached entry and synchronously releases its session.
+     *
+     * <p>The overload with an expected session removes the entry only if its current
+     * value is that exact instance, preventing stale callbacks from deleting replacements.
+     *
+     * @param key      the attribute or cache key
+     * @param expected the exact session instance required for removal
+     * @return {@code true} if an entry was removed
+     */
+    public boolean removeSession(Credentials key, PlayerSession expected) {
+        boolean removed;
+        synchronized (this) {
+            com.akakata.app.PlayerSession current = sessions.asMap().get(key);
+            removed = current != null && current == expected;
+            if (removed) {
+                sessions.asMap().remove(key);
+            }
+        }
+        if (removed) {
+            cleanupSync(expected);
+        }
+        return removed;
+    }
+
+    /**
+     * Publishes a replacement session and closes the previous distinct session outside the registry
+     * monitor.
+     *
+     * <p>Replacing a session with the same instance does not close it.
+     *
+     * @param credentials the verified credential identity
+     * @param newSession  the replacement player session
+     * @return the previous session, or {@code null} if no entry existed
+     * @throws IllegalArgumentException if the credentials or replacement is null
+     * @throws IllegalStateException    if the service or replacement session is closed
+     * @throws SessionCapacityException if a new credential would exceed the admission limit
+     */
+    public PlayerSession replaceSession(Credentials credentials, PlayerSession newSession) {
+        if (credentials == null || newSession == null) {
+            throw new IllegalArgumentException("credentials and newSession cannot be null");
+        }
+        return registerSession(credentials, newSession);
+    }
+
+    /**
+     * Registers ownership and a close listener atomically with respect to session closure, then
+     * cleans up the old entry.
+     *
+     * @param credentials the verified credential identity
+     * @param newSession  the replacement player session
+     * @return the previous session, or {@code null} if no entry existed
+     * @throws IllegalStateException if the service or new session is closed
+     */
+    private PlayerSession registerSession(Credentials credentials, PlayerSession newSession) {
+        PlayerSession oldSession;
+        // Share DefaultSession.close()'s monitor to register the close listener atomically.
+        // Lock order is session -> service. Cleanup always runs outside the service monitor.
+        synchronized (newSession) {
+            if (newSession.isShuttingDown() || newSession.getStatus() == Session.Status.CLOSED) {
+                throw new IllegalStateException("Session is closed");
+            }
+            synchronized (this) {
+                if (closed) {
+                    throw new IllegalStateException("SessionService is closed");
+                }
+                oldSession = sessions.asMap().get(credentials);
+                if (oldSession == null && sessions.asMap().size() >= maximumSessions) {
+                    throw new SessionCapacityException(maximumSessions);
+                }
+                sessions.asMap().put(credentials, newSession);
+                ownedSessions.add(newSession);
+                DefaultSession java8Pattern40;
+                if (oldSession != newSession && ((java8Pattern40 = com.akakata.compat.Java8.cast(newSession, DefaultSession.class)) != null)) {
+                    java8Pattern40.addCloseListener(() -> onSessionClosed(credentials, newSession));
+                }
+            }
+        }
+        if (oldSession != null && oldSession != newSession) {
+            cleanupSync(oldSession);
+        }
+        return oldSession;
+    }
+
+    /**
+     * Returns recorded cache statistics.
+     *
+     * @return the cumulative cache statistics snapshot
+     */
+    public CacheStats getStats() {
+        return sessions.stats();
+    }
+
+    /**
+     * Returns the current number of registered credential slots.
+     *
+     * @return the credential registry size
+     */
+    public long size() {
+        return sessions.asMap().size();
+    }
+
+    /**
+     * Returns the maximum number of simultaneously admitted credentials.
+     *
+     * @return the positive credential-slot budget
+     */
+    public int maximumSessions() {
+        return maximumSessions;
+    }
+
+    /**
+     * Reports whether this registry has stopped admitting sessions.
+     *
+     * @return whether closure has begun
+     */
+    public boolean isClosed() {
+        return closed;
+    }
+
+    /**
+     * Stops periodic cleanup and closes every owned session before invalidating the cache.
+     *
+     * <p>Session cleanup runs outside the service monitor. Repeated calls have no effect
+     * after the service is marked closed, and one failed session does not skip the rest.
+     */
+    public void close() {
+        ArrayList<PlayerSession> sessionsToClose;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            sessionsToClose = new ArrayList<>(ownedSessions);
+        }
+
+        LOG.info("Shutting down SessionService...");
+
+        // 停止清理任务
+        if (cleanupExecutor != null) {
+            cleanupExecutor.shutdown();
+            try {
+                if (!cleanupExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    cleanupExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                cleanupExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        // RemovalListener runs asynchronously, so close the snapshot on this thread first.
+        for (PlayerSession session : sessionsToClose) {
+            cleanupSync(session);
+        }
+
+        // Already-closed sessions are ignored by the removal listener.
+        sessions.invalidateAll();
+        sessions.cleanUp();
+
+        LOG.info("SessionService shut down (final stats: {})", getStats());
+    }
+}

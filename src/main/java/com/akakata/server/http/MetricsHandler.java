@@ -1,0 +1,385 @@
+package com.akakata.server.http;
+
+import com.akakata.event.impl.DispatcherSnapshot;
+import com.akakata.metrics.EventDispatcherMetrics;
+import com.akakata.metrics.FlowControlMetrics;
+import com.akakata.metrics.ServerMetrics;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.util.CharsetUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Serves JSON metric groups and Prometheus text metrics.
+ *
+ * @author Kelvin
+ */
+public class MetricsHandler extends AbstractHttpHandler {
+
+    /**
+     * Creates a metrics handler instance.
+     */
+    public MetricsHandler() {
+    }
+
+    /**
+     * Logger for component lifecycle and diagnostic messages.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(MetricsHandler.class);
+
+    /**
+     * Shared JSON mapper for payload conversion.
+     */
+    private static final ObjectMapper MAPPER = com.akakata.compat.Json8.mapper();
+
+    /**
+     * Singleton server counter and JVM-resource metrics collector.
+     */
+    private final ServerMetrics metrics = ServerMetrics.getInstance();
+
+    /**
+     * Routes requests to JSON metric groups or Prometheus output.
+     *
+     * @param ctx     channel handler context
+     * @param request HTTP request
+     */
+    public void handleMetrics(ChannelHandlerContext ctx, FullHttpRequest request) {
+        String uri = request.uri();
+
+        try {
+            if (uri.equals("/metrics") || uri.equals("/metrics/")) {
+                handleAllMetrics(ctx);
+            } else if (uri.startsWith("/metrics/connections")) {
+                handleConnectionMetrics(ctx);
+            } else if (uri.startsWith("/metrics/traffic")) {
+                handleTrafficMetrics(ctx);
+            } else if (uri.startsWith("/metrics/system")) {
+                handleSystemMetrics(ctx);
+            } else if (uri.startsWith("/metrics/event-dispatcher")) {
+                handleEventDispatcherMetrics(ctx);
+            } else if (uri.startsWith("/metrics/flow-control")) {
+                sendMetricResponse(ctx, Unpooled.copiedBuffer(com.akakata.compat.Json8.writeValueAsString(MAPPER,
+                        FlowControlMetrics.snapshot()), CharsetUtil.UTF_8), "application/json; charset=UTF-8");
+            } else if (uri.startsWith("/metrics/prometheus")) {
+                handlePrometheusMetrics(ctx);
+            } else {
+                sendError(ctx, HttpResponseStatus.NOT_FOUND, true);
+            }
+        } catch (Exception e) {
+            LOG.error("Error handling metrics request", e);
+            sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, true);
+        }
+    }
+
+    /**
+     * Writes a combined JSON snapshot of connection, traffic, system and dispatcher metrics.
+     *
+     * @param ctx the Netty pipeline context
+     */
+    private void handleAllMetrics(ChannelHandlerContext ctx) {
+        try {
+            Map<String, Object> response = new LinkedHashMap<>();
+
+            // Server info
+            Map<String, Object> server = new LinkedHashMap<>();
+            server.put("uptime_seconds", metrics.getUptimeSeconds());
+            server.put("uptime_formatted", formatUptime(metrics.getUptimeSeconds()));
+            response.put("server", server);
+
+            // Connection metrics
+            Map<String, Object> connections = new LinkedHashMap<>();
+            connections.put("total", metrics.getTotalConnections());
+            connections.put("active", metrics.getActiveConnections());
+            connections.put("channels", metrics.getCurrentChannelCount());
+            response.put("connections", connections);
+
+            // Traffic metrics
+            Map<String, Object> traffic = new LinkedHashMap<>();
+            traffic.put("messages_received", metrics.getTotalMessagesReceived());
+            traffic.put("messages_sent", metrics.getTotalMessagesSent());
+            traffic.put("bytes_received", metrics.getTotalBytesReceived());
+            traffic.put("bytes_sent", metrics.getTotalBytesSent());
+            traffic.put("bytes_received_mb", metrics.getTotalBytesReceived() / 1024 / 1024);
+            traffic.put("bytes_sent_mb", metrics.getTotalBytesSent() / 1024 / 1024);
+            response.put("traffic", traffic);
+
+            // System metrics
+            Map<String, Object> system = new LinkedHashMap<>();
+            system.put("memory_used_mb", metrics.getUsedMemoryMB());
+            system.put("memory_max_mb", metrics.getMaxMemoryMB());
+            system.put("memory_usage_percent", (int) (metrics.getUsedMemoryMB() * 100.0 / metrics.getMaxMemoryMB()));
+            system.put("thread_count", metrics.getThreadCount());
+            system.put("cpu_load", Double.parseDouble(String.format(java.util.Locale.ROOT, "%.2f", metrics.getCpuLoad())));
+            response.put("system", system);
+
+            // Error metrics
+            Map<String, Object> errors = new LinkedHashMap<>();
+            errors.put("total", metrics.getTotalErrors());
+            response.put("errors", errors);
+
+            response.put("flow_control", FlowControlMetrics.snapshot());
+
+            // Timestamp
+            response.put("timestamp", System.currentTimeMillis());
+
+            String json = com.akakata.compat.Json8.writeValueAsString(MAPPER, response);
+            sendMetricResponse(ctx, Unpooled.copiedBuffer(json, CharsetUtil.UTF_8), "application/json; charset=UTF-8");
+        } catch (Exception e) {
+            LOG.error("Failed to serialize all metrics", e);
+            sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, true);
+        }
+    }
+
+    /**
+     * Writes connection counts as JSON.
+     *
+     * @param ctx the Netty pipeline context
+     */
+    private void handleConnectionMetrics(ChannelHandlerContext ctx) {
+        try {
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("total_connections", metrics.getTotalConnections());
+            response.put("active_connections", metrics.getActiveConnections());
+            response.put("active_channels", metrics.getCurrentChannelCount());
+            response.put("timestamp", System.currentTimeMillis());
+
+            String json = com.akakata.compat.Json8.writeValueAsString(MAPPER, response);
+            sendMetricResponse(ctx, Unpooled.copiedBuffer(json, CharsetUtil.UTF_8), "application/json; charset=UTF-8");
+        } catch (Exception e) {
+            LOG.error("Failed to serialize connection metrics", e);
+            sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, true);
+        }
+    }
+
+    /**
+     * Writes cumulative message and byte counters as JSON.
+     *
+     * @param ctx the Netty pipeline context
+     */
+    private void handleTrafficMetrics(ChannelHandlerContext ctx) {
+        try {
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("messages_received", metrics.getTotalMessagesReceived());
+            response.put("messages_sent", metrics.getTotalMessagesSent());
+            response.put("bytes_received", metrics.getTotalBytesReceived());
+            response.put("bytes_sent", metrics.getTotalBytesSent());
+            response.put("bytes_received_mb", metrics.getTotalBytesReceived() / 1024 / 1024);
+            response.put("bytes_sent_mb", metrics.getTotalBytesSent() / 1024 / 1024);
+            response.put("timestamp", System.currentTimeMillis());
+
+            String json = com.akakata.compat.Json8.writeValueAsString(MAPPER, response);
+            sendMetricResponse(ctx, Unpooled.copiedBuffer(json, CharsetUtil.UTF_8), "application/json; charset=UTF-8");
+        } catch (Exception e) {
+            LOG.error("Failed to serialize traffic metrics", e);
+            sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, true);
+        }
+    }
+
+    /**
+     * Writes uptime, memory, thread and CPU values as JSON.
+     *
+     * @param ctx the Netty pipeline context
+     */
+    private void handleSystemMetrics(ChannelHandlerContext ctx) {
+        try {
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("memory_used_mb", metrics.getUsedMemoryMB());
+            response.put("memory_max_mb", metrics.getMaxMemoryMB());
+            response.put("memory_usage_percent", (int) (metrics.getUsedMemoryMB() * 100.0 / metrics.getMaxMemoryMB()));
+            response.put("thread_count", metrics.getThreadCount());
+            response.put("cpu_load", Double.parseDouble(String.format(java.util.Locale.ROOT, "%.2f", metrics.getCpuLoad())));
+            response.put("uptime_seconds", metrics.getUptimeSeconds());
+            response.put("timestamp", System.currentTimeMillis());
+
+            String json = com.akakata.compat.Json8.writeValueAsString(MAPPER, response);
+            sendMetricResponse(ctx, Unpooled.copiedBuffer(json, CharsetUtil.UTF_8), "application/json; charset=UTF-8");
+        } catch (Exception e) {
+            LOG.error("Failed to serialize system metrics", e);
+            sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, true);
+        }
+    }
+
+    /**
+     * Writes sampled dispatcher queue metrics as JSON.
+     *
+     * @param ctx the Netty pipeline context
+     */
+    private void handleEventDispatcherMetrics(ChannelHandlerContext ctx) {
+        try {
+            EventDispatcherMetrics edMetrics = EventDispatcherMetrics.getInstance();
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("total_queue_size", edMetrics.getTotalQueueSize());
+            response.put("per_shard_queue_sizes", edMetrics.getPerShardQueueSizes());
+            response.put("shard_count", edMetrics.getShardCount());
+            response.put("max_shard_queue_size", edMetrics.getMaxShardQueueSize());
+            response.put("min_shard_queue_size", edMetrics.getMinShardQueueSize());
+            response.put("average_shard_queue_size", edMetrics.getAverageShardQueueSize());
+            response.put("last_update_timestamp", edMetrics.getLastUpdateTimestamp());
+            response.put("is_started", edMetrics.isStarted());
+            response.put("timestamp", System.currentTimeMillis());
+
+            String json = com.akakata.compat.Json8.writeValueAsString(MAPPER, response);
+            sendMetricResponse(ctx, Unpooled.copiedBuffer(json, CharsetUtil.UTF_8), "application/json; charset=UTF-8");
+        } catch (Exception e) {
+            LOG.error("Failed to serialize event dispatcher metrics", e);
+            sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, true);
+        }
+    }
+
+    /**
+     * Writes named metrics in Prometheus text exposition format.
+     *
+     * @param ctx the Netty pipeline context
+     */
+    private void handlePrometheusMetrics(ChannelHandlerContext ctx) {
+        StringBuilder prom = new StringBuilder();
+
+        // Server uptime
+        addPrometheusMetric(prom, "server_uptime_seconds", "counter", "Server uptime in seconds", metrics.getUptimeSeconds());
+
+        // Connections
+        addPrometheusMetric(prom, "connections_total", "counter", "Total number of connections", metrics.getTotalConnections());
+        addPrometheusMetric(prom, "connections_active", "gauge", "Current active connections", metrics.getActiveConnections());
+        addPrometheusMetric(prom, "channels_active", "gauge", "Current active channels", metrics.getCurrentChannelCount());
+
+        // Messages
+        addPrometheusMetric(prom, "messages_received_total", "counter", "Total messages received", metrics.getTotalMessagesReceived());
+        addPrometheusMetric(prom, "messages_sent_total", "counter", "Total messages sent", metrics.getTotalMessagesSent());
+
+        // Bytes
+        addPrometheusMetric(prom, "bytes_received_total", "counter", "Total bytes received", metrics.getTotalBytesReceived());
+        addPrometheusMetric(prom, "bytes_sent_total", "counter", "Total bytes sent", metrics.getTotalBytesSent());
+
+        // Memory
+        addPrometheusMetric(prom, "memory_used_bytes", "gauge", "Memory used in bytes", metrics.getUsedMemoryMB() * 1024 * 1024);
+        addPrometheusMetric(prom, "memory_max_bytes", "gauge", "Maximum memory in bytes", metrics.getMaxMemoryMB() * 1024 * 1024);
+
+        // Threads
+        addPrometheusMetric(prom, "threads_current", "gauge", "Current thread count", metrics.getThreadCount());
+
+        // CPU
+        addPrometheusMetric(prom, "cpu_load", "gauge", "System CPU load", Double.parseDouble(String.format(java.util.Locale.ROOT, "%.2f", metrics.getCpuLoad())));
+
+        // Errors
+        addPrometheusMetric(prom, "errors_total", "counter", "Total errors", metrics.getTotalErrors());
+
+        FlowControlMetrics.transportSnapshot().forEach((name, value) -> {
+            String type = com.akakata.compat.Java8.setOf("active_connections", "paused_channels", "pending_writes", "pending_socket_bytes",
+                            "pending_payload_bytes", "pending_http_file_transfers")
+                    .contains(name) ? "gauge" : "counter";
+            addPrometheusMetric(prom, "zea_flow_" + name, type, "Transport flow " + name, value);
+        });
+        java.util.Map<java.lang.String,java.lang.Object> flow = FlowControlMetrics.snapshot();
+        for (String scope : com.akakata.compat.Java8.listOf("outbound", "blocking")) {
+            java.util.Map<?, ?> java8Pattern34;
+            if (((java8Pattern34 = com.akakata.compat.Java8.cast(flow.get(scope), java.util.Map.class)) != null)) {
+                java8Pattern34.forEach((name, value) -> addPrometheusMetric(prom, "zea_flow_" + scope + "_" + name,
+                        "gauge", "Resource allowance " + scope + " " + name, value));
+            }
+        }
+        java.util.List<com.akakata.event.impl.DispatcherSnapshot> sessions = com.akakata.event.impl.EventDispatchers.sharedGroup().snapshots();
+        for (int i = 0; i < sessions.size(); i++) {
+            appendFlowMetrics(prom, "session", i, sessions.get(i));
+        }
+        DispatcherSnapshot java8Pattern35;
+        if (((java8Pattern35 = com.akakata.compat.Java8.cast(flow.get("game"), DispatcherSnapshot.class)) != null)) {
+            appendFlowMetrics(prom, "game", 0, java8Pattern35);
+        }
+        sendMetricResponse(ctx, Unpooled.copiedBuffer(prom.toString(), CharsetUtil.UTF_8), "text/plain; charset=UTF-8");
+    }
+
+    /**
+     * Appends HELP, TYPE and sample lines for one Prometheus metric.
+     *
+     * @param sb    StringBuilder to append to
+     * @param name  metric name
+     * @param type  metric type (counter, gauge, histogram, summary)
+     * @param help  help description
+     * @param value metric value
+     */
+    private void addPrometheusMetric(StringBuilder sb, String name, String type, String help, Object value) {
+        sb.append("# HELP ").append(name).append(" ").append(help).append("\n");
+        sb.append("# TYPE ").append(name).append(" ").append(type).append("\n");
+        sb.append(name).append(" ").append(value).append("\n\n");
+    }
+
+    /**
+     * Formats uptime seconds into a readable day, hour, minute and second duration.
+     *
+     * @param seconds the duration in seconds
+     * @return the formatted duration
+     */
+    private String formatUptime(long seconds) {
+        long days = seconds / 86400;
+        long hours = (seconds % 86400) / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+
+        if (days > 0) {
+            return String.format("%dd %dh %dm %ds", days, hours, minutes, secs);
+        } else if (hours > 0) {
+            return String.format("%dh %dm %ds", hours, minutes, secs);
+        } else if (minutes > 0) {
+            return String.format("%dm %ds", minutes, secs);
+        } else {
+            return String.format("%ds", secs);
+        }
+    }
+
+    /**
+     * Copies metric response content and releases its temporary source on every path.
+     *
+     * @param ctx         the HTTP channel context
+     * @param content     the owned temporary serialized metrics buffer
+     * @param contentType the response media type
+     */
+    private void sendMetricResponse(ChannelHandlerContext ctx, io.netty.buffer.ByteBuf content, String contentType) {
+        try {
+            sendHttpResponse(ctx, content, contentType);
+        } finally {
+            content.release();
+        }
+    }
+
+    /**
+     * Appends one executor's labelled budgets, counters and histogram percentile bounds.
+     *
+     * @param target   the Prometheus text builder
+     * @param scope    the session or Game scope
+     * @param shard    the fixed executor index
+     * @param snapshot current executor counters
+     */
+    private static void appendFlowMetrics(StringBuilder target, String scope, int shard,
+                                          DispatcherSnapshot snapshot) {
+        Map<String, Long> values = new LinkedHashMap<>();
+        values.put("queued_tasks", (long) snapshot.queued());
+        values.put("pending_bytes", snapshot.pendingBytes());
+        values.put("task_capacity", (long) snapshot.capacity());
+        values.put("byte_budget", snapshot.byteBudget());
+        values.put("accepted", snapshot.accepted());
+        values.put("completed", snapshot.completed());
+        values.put("cancelled", snapshot.cancelled());
+        values.put("rejected", snapshot.rejected());
+        values.put("wait_p95_micros", snapshot.waitP95Micros());
+        values.put("wait_p99_micros", snapshot.waitP99Micros());
+        values.put("execution_p95_micros", snapshot.executionP95Micros());
+        values.put("execution_p99_micros", snapshot.executionP99Micros());
+        values.forEach((name, value) -> {
+            if (scope.equals("session") && shard == 0) {
+                String type = com.akakata.compat.Java8.setOf("accepted", "completed", "cancelled", "rejected").contains(name) ? "counter" : "gauge";
+                target.append("# TYPE zea_executor_").append(name).append(' ').append(type).append('\n');
+            }
+            target.append("zea_executor_").append(name).append("{scope=\"").append(scope)
+                    .append("\",shard=\"").append(shard).append("\"} ").append(value).append('\n');
+        });
+    }
+
+}

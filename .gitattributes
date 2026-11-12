@@ -1,0 +1,5 @@
+# Preserve the upstream banner's intentional padding.
+src/main/resources/banner.txt -whitespace
+
+# Preserve the upstream Flash policy's CRLF bytes and check other whitespace.
+src/main/resources/props/flash-policy.xml -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

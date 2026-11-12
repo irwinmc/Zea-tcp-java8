@@ -1,0 +1,162 @@
+import java.security.MessageDigest
+import groovy.json.JsonSlurper
+
+// Keep runtime dependencies and Java sources independent of publication tooling.
+def releaseGroup = project.group.toString()
+def releaseArtifact = 'zea-tcp-java8'
+def releaseVersion = project.version.toString()
+def versionPath = "${releaseGroup.replace('.', '/')}/${releaseArtifact}/${releaseVersion}"
+def staging = layout.buildDirectory.dir('central/staging')
+def bundle = layout.buildDirectory.file('central/central-bundle.zip')
+def upstreamUrl = 'https://github.com/irwinmc/Zea-tcp'
+def projectUrl = 'https://github.com/irwinmc/Zea-tcp-java8'
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            artifactId = releaseArtifact
+            pom {
+                name = 'Zea TCP Transport Java 8'
+                description = 'Behavior-preserving Java 8 port of Zea TCP Transport, a Netty transport and protocol gateway.'
+                url = projectUrl
+                inceptionYear = '2025'
+                licenses {
+                    license {
+                        name = 'Apache License, Version 2.0'
+                        url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                        distribution = 'repo'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'kelvin'
+                        name = 'Kelvin'
+                        email = 'kyia.x52@gmail.com'
+                        organization = 'Akakata'
+                        roles = ['lead', 'maintainer']
+                    }
+                }
+                scm {
+                    connection = "scm:git:${projectUrl}.git"
+                    developerConnection = 'scm:git:ssh://git@github.com/irwinmc/Zea-tcp-java8.git'
+                    url = projectUrl
+                    tag = 'HEAD'
+                }
+                properties = [
+                    'zea.java8.port': 'true',
+                    'zea.upstream.url': upstreamUrl,
+                    'zea.upstream.version': '0.8.5',
+                    'zea.upstream.commit': '04f2b025712c7a4446e16ed72a42a8b57cf5f272'
+                ]
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = 'centralStaging'
+            url = staging
+        }
+    }
+}
+
+def localSigningFile = file('.internal-docs/central-publishing.local.json')
+def localSigning = localSigningFile.isFile() ? new JsonSlurper().parse(localSigningFile) : [:]
+def privateKey = System.getenv('GPG_PRIVATE_KEY') ?: System.getenv('MAVEN_GPG_KEY') ?: localSigning.GPG_PRIVATE_KEY
+def keyPassword = System.getenv('GPG_PASSPHRASE') ?: System.getenv('MAVEN_GPG_PASSPHRASE') ?: localSigning.GPG_PASSPHRASE
+def keyId = System.getenv('GPG_KEY_ID') ?: localSigning.GPG_KEY_ID
+
+if (!privateKey) {
+    if (keyId) {
+        ext['signing.gnupg.keyName'] = keyId
+    }
+    if (keyPassword) {
+        ext['signing.gnupg.passphrase'] = keyPassword
+    }
+}
+
+signing {
+    if (privateKey) {
+        useInMemoryPgpKeys(privateKey, keyPassword)
+    } else {
+        useGpgCmd()
+    }
+    sign publishing.publications.mavenJava
+}
+
+tasks.register('validateCentralVersion') {
+    group = 'publishing'
+    description = 'Rejects snapshot, malformed and unintended Central coordinates.'
+    doLast {
+        if (releaseGroup != 'com.akakata' || releaseArtifact != 'zea-tcp-java8') {
+            throw new GradleException('Central publication is restricted to com.akakata:zea-tcp-java8.')
+        }
+        if (!(releaseVersion ==~ /[0-9][0-9A-Za-z._-]*/) || releaseVersion.toUpperCase(Locale.ROOT).endsWith('-SNAPSHOT')) {
+            throw new GradleException('Central publication requires a literal release version.')
+        }
+        def tag = System.getenv('RELEASE_TAG')
+        if (tag && tag.replaceFirst(/^v/, '') != releaseVersion) {
+            throw new GradleException('Release tag does not match the Gradle publication version.')
+        }
+    }
+}
+
+tasks.register('prepareCentralStaging', Delete) {
+    dependsOn tasks.named('validateCentralVersion')
+    delete staging
+}
+
+tasks.named('publishMavenJavaPublicationToCentralStagingRepository') {
+    dependsOn tasks.named('prepareCentralStaging')
+}
+
+tasks.register('centralChecksums') {
+    dependsOn tasks.named('publishMavenJavaPublicationToCentralStagingRepository')
+    doLast {
+        def directory = staging.get().dir(versionPath).asFile
+        directory.eachFile { artifact ->
+            if (artifact.name.endsWith('.jar') || artifact.name.endsWith('.pom') ||
+                    artifact.name.endsWith('.module') || artifact.name.endsWith('.asc')) {
+                ['MD5': 'md5', 'SHA-1': 'sha1', 'SHA-256': 'sha256', 'SHA-512': 'sha512'].each { algorithm, extension ->
+                    def digest = MessageDigest.getInstance(algorithm).digest(artifact.bytes)
+                    new File(directory, "${artifact.name}.${extension}").text = digest.encodeHex().toString()
+                }
+            }
+        }
+    }
+}
+
+tasks.register('bundleCentral', Zip) {
+    group = 'publishing'
+    description = 'Stages signed artifacts and all checksums without repository metadata.'
+    dependsOn tasks.named('centralChecksums')
+    from(staging.map { it.dir(versionPath) }) {
+        into versionPath
+    }
+    archiveFileName = 'central-bundle.zip'
+    destinationDirectory = layout.buildDirectory.dir('central')
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+tasks.register('verifyCentralBundle', Exec) {
+    group = 'verification'
+    description = 'Checks Maven metadata, Java 8 bytecode, archives, signatures and checksums.'
+    dependsOn tasks.named('bundleCentral')
+    commandLine 'python3', 'scripts/central_publishing.py', 'verify',
+            '--bundle', bundle.get().asFile.absolutePath,
+            '--version', releaseVersion,
+            '--report-dir', file('.internal-docs/publication-reports').absolutePath
+}
+
+tasks.register('publishCentral', Exec) {
+    group = 'publishing'
+    description = 'Verifies, uploads and waits for Central publication using a resumable journal.'
+    dependsOn tasks.named('check'), tasks.named('testJavadoc'), tasks.named('verifyCentralBundle')
+    commandLine 'python3', 'scripts/central_publishing.py', 'publish',
+            '--bundle', bundle.get().asFile.absolutePath,
+            '--version', releaseVersion,
+            '--report-dir', file('.internal-docs/publication-reports').absolutePath,
+            '--endpoint', providers.gradleProperty('centralEndpoint').getOrElse('https://central.sonatype.com/api/v1/publisher'),
+            '--poll-interval', providers.gradleProperty('centralPollInterval').getOrElse('5')
+}

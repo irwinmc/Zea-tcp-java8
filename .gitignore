@@ -1,0 +1,86 @@
+target/
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### Gradle ###
+/.gradle/
+/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+### JVM Runtime Output ###
+/out/
+*.class
+*.log
+*.hprof
+*.jfr
+hs_err_pid*
+replay_pid*
+
+### IntelliJ IDEA ###
+.idea/
+.run/
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+### Claude ###
+.claude/
+
+### Local Remote Tests ###
+/remote-test.local.json
+/remote-test-results/
+
+### Local Maintainer Documentation ###
+/.internal-docs/
+
+### Local Configuration and Signing Credentials ###
+.env
+.env.*
+!.env.example
+!.env.template
+*.local.json
+*.local.properties
+*.local.yaml
+*.local.yml
+/local.properties
+.gnupg/
+*.key
+*.keystore
+*.jks
+*.p12
+*.pfx
+/*.pem
+/private-key*.asc
+/signing-key*.asc
+/secring.gpg
+
+### Python Test Helpers ###
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

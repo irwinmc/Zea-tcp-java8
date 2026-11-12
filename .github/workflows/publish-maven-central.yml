@@ -1,0 +1,104 @@
+name: Publish Java 8 to Maven Central
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version matching gradle.properties
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maven-central-java8-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Validate, sign and publish Java 8
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the selected release revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+
+      - name: Set up Java 8
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '8'
+          cache: gradle
+
+      - name: Validate the release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.version }}
+        run: ./gradlew --no-daemon --console=plain validateCentralVersion
+
+      - name: Check publishing secrets
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        shell: bash
+        run: |
+          for secret in MAVEN_CENTRAL_USERNAME MAVEN_CENTRAL_PASSWORD GPG_PRIVATE_KEY GPG_PASSPHRASE; do
+            if [[ -z "${!secret}" ]]; then
+              printf '::error::Missing repository secret: %s\n' "$secret"
+              exit 1
+            fi
+          done
+
+      - name: Run Java 8 tests and strict JavaDoc checks
+        run: >-
+          python3 scripts/test_report.py
+          --report-dir .internal-docs/migration-reports/ci
+          --name java8-verification --
+          ./gradlew --no-daemon --console=plain clean build testJavadoc
+
+      - name: Verify the signed publication lifecycle locally
+        run: >-
+          python3 scripts/test_report.py
+          --report-dir .internal-docs/migration-reports/ci
+          --name publication-regressions --
+          python3 .github/scripts/test-central-publishing.py
+          --report-dir .internal-docs/migration-reports/ci/publication-cases
+
+      - name: Import the signing identity for cryptographic verification
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          subprocess.run(['gpg', '--batch', '--import'],
+                         input=os.environ['GPG_PRIVATE_KEY'].encode(),
+                         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+          PY
+
+      - name: Sign, publish and verify public repository artifacts
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.version }}
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: ./gradlew --no-daemon --console=plain publishCentral
+
+      - name: Preserve every verification and publication report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: java8-publication-reports-${{ github.event.release.tag_name || inputs.version }}
+          path: |
+            .internal-docs/migration-reports/ci/
+            .internal-docs/publication-reports/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
