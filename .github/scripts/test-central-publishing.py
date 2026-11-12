@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -394,6 +395,32 @@ class PublicationTest(unittest.TestCase):
             self.assertNotIn("PRIVATE KEY", text)
 
 
+class ReleaseWorkflowPolicyTest(unittest.TestCase):
+    """Keep Central publication tied to a published immutable release tag."""
+
+    def test_only_published_releases_can_trigger_publication(self):
+        workflow = (ROOT / ".github/workflows/publish-maven-central.yml").read_text()
+        triggers = workflow.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        event_names = re.findall(r"^  ([a-z_]+):", triggers, re.MULTILINE)
+        self.assertEqual(event_names, ["release"])
+        self.assertIn("types: [published]", triggers)
+
+    def test_checkout_and_job_use_the_release_tag_without_branch_fallback(self):
+        workflow = (ROOT / ".github/workflows/publish-maven-central.yml").read_text()
+        self.assertIn("ref: ${{ github.event.release.tag_name }}", workflow)
+        self.assertIn("if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')", workflow)
+        self.assertNotIn("inputs.version", workflow)
+        self.assertNotIn("|| github.ref", workflow)
+
+    def test_verification_reports_are_preserved_after_failures(self):
+        workflow = (ROOT / ".github/workflows/publish-maven-central.yml").read_text()
+        reporting = workflow.split("- name: Preserve every verification and publication report\n", 1)[1]
+        self.assertIn("if: always()", reporting)
+        self.assertIn("include-hidden-files: true", reporting)
+        self.assertIn("python3 scripts/test_report.py", workflow)
+        self.assertNotIn("central-publishing.local.json", reporting)
+
+
 class ReportingResult(unittest.TextTestResult):
     """Write an independent report for every publication regression."""
 
@@ -423,7 +450,10 @@ if __name__ == "__main__":
     parser.add_argument("--report-dir", type=Path, default=ROOT / ".internal-docs/publication-regression-reports")
     args = parser.parse_args()
     REPORTS = args.report_dir
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(PublicationTest)
+    suite = unittest.TestSuite([
+        unittest.defaultTestLoader.loadTestsFromTestCase(PublicationTest),
+        unittest.defaultTestLoader.loadTestsFromTestCase(ReleaseWorkflowPolicyTest),
+    ])
     result = unittest.TextTestRunner(verbosity=2, resultclass=ReportingResult).run(suite)
     CENTRAL.save_report(REPORTS, "summary", {"status": "PASS" if result.wasSuccessful() else "FAIL",
                          "tests": result.testsRun, "failures": len(result.failures), "errors": len(result.errors),

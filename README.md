@@ -1,7 +1,7 @@
 # Zea TCP for Java 8
 
 Zea TCP for Java 8 is a Gradle port of Zea TCP Transport. The fork version is
-**0.8.5**, with the synchronized Java 21 upstream **0.8.5** as its behavior baseline.
+**0.8.6**, with the synchronized Java 21 upstream **0.8.6** as its behavior baseline.
 This version contains only upstream synchronization and equivalent compatibility
 rewrites; it introduces no independent framework functionality.
 
@@ -23,21 +23,21 @@ checksum; a system Gradle installation is unnecessary.
 ./gradlew --no-daemon --console=plain clean build testJavadoc
 ```
 
-Compilation, test JVMs and JavaDoc use the Java 8 toolchain. Tests include the 320
+Compilation, test JVMs and JavaDoc use the Java 8 toolchain. Tests include 334
 inherited regression cases plus 25 Java 8 equivalence cases. JavaDoc includes
 private members and test sources; warnings and errors fail the build.
 
-The library JAR is `build/libs/zea-tcp-java8-0.8.5.jar`; source and JavaDoc archives
+The library JAR is `build/libs/zea-tcp-java8-0.8.6.jar`; source and JavaDoc archives
 are produced alongside it. It contains no executable application entry point and
 does not bundle its runtime dependencies. The published coordinates are
-`com.akakata:zea-tcp-java8:0.8.5`, available from
-[Maven Central](https://central.sonatype.com/artifact/com.akakata/zea-tcp-java8/0.8.5).
+`com.akakata:zea-tcp-java8:0.8.6`, available from
+[Maven Central](https://central.sonatype.com/artifact/com.akakata/zea-tcp-java8/0.8.6).
 
 In a Gradle application with `mavenCentral()` configured:
 
 ```groovy
 dependencies {
-    implementation 'com.akakata:zea-tcp-java8:0.8.5'
+    implementation 'com.akakata:zea-tcp-java8:0.8.6'
 }
 ```
 

@@ -41,13 +41,13 @@ publishing {
                     connection = "scm:git:${projectUrl}.git"
                     developerConnection = 'scm:git:ssh://git@github.com/irwinmc/Zea-tcp-java8.git'
                     url = projectUrl
-                    tag = 'HEAD'
+                    tag = "v${releaseVersion}"
                 }
                 properties = [
                     'zea.java8.port': 'true',
                     'zea.upstream.url': upstreamUrl,
-                    'zea.upstream.version': '0.8.5',
-                    'zea.upstream.commit': '04f2b025712c7a4446e16ed72a42a8b57cf5f272'
+                    'zea.upstream.version': '0.8.6',
+                    'zea.upstream.commit': '64b474694bd98bcad3403ac27e00a0794f4b84a7'
                 ]
             }
         }

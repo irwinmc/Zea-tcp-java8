@@ -2,9 +2,9 @@
 
 ## Baseline and Scope
 
-The fork release version is **0.8.5**, as requested. Its synchronized behavior baseline is
-Zea TCP Transport **0.8.5**, commit
-`04f2b025712c7a4446e16ed72a42a8b57cf5f272`.
+The fork release version is **0.8.6**. Its synchronized behavior baseline is
+Zea TCP Transport **0.8.6**, commit
+`64b474694bd98bcad3403ac27e00a0794f4b84a7`.
 
 All upstream source, configuration, regression and guide changes since the initial
 copy were inspected and synchronized before compatibility rewrites. Gradle build
@@ -15,6 +15,21 @@ framework behavior and preserves the existing compatibility scope.
 This version permits synchronization and equivalent rewrites only. Framework
 APIs, protocols, configuration, authentication, ordering, admission, backpressure,
 shutdown and resource ownership follow the synchronized upstream contracts.
+
+### Upstream Fixes Synchronized for 0.8.6
+
+On 2026-11-13 the user explicitly authorized fixing three upstream issues and
+synchronizing their Java 8 equivalents: empty-string frame decoding, predictable
+random-provider failure fallback, and filesystem work on HTTP I/O loops. These
+changes are included in the synchronized 0.8.6 baseline and introduce no independent
+fork features. The previously published 0.8.5 artifacts are unchanged.
+
+Filesystem workers and cleanup ownership use the same Java 8-compatible implementation
+as upstream. Existing path/blank-string adaptations retain their equivalent behavior.
+The complete inherited and port-compatibility suites remain active. Final acceptance
+passes 359 cases on a real Java 8 runtime, including 14 synchronized upstream
+regressions, plus strict main/private and test JavaDoc. All 252 framework classes
+and 136 test classes use Java 8 bytecode; dependencies remain unchanged.
 
 ## Completed Adaptation
 
@@ -52,7 +67,7 @@ A real Azul Zulu JDK **1.8.0_504**, verified against its vendor SHA-256, was use
 compilation and test execution on macOS ARM64. The Gradle wrapper is pinned to
 8.14.5 and its official wrapper/distribution checksums are verified.
 
-The isolated Java 21 baseline passes all **320** inherited cases and strict main/test
+The original isolated Java 21 0.8.5 baseline passed all **320** inherited cases and strict main/test
 JavaDoc. The Java 8 port preserves those cases and adds **25** compatibility cases.
 Every verification run, failure and individual JUnit outcome is retained locally;
 configuration-only checks are never presented as compatibility acceptance.

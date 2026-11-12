@@ -35,7 +35,19 @@ jobs:
         run: ./gradlew --version
 
       - name: Run regression tests and strict JavaDoc checks
-        run: ./gradlew --no-daemon --console=plain clean build testJavadoc
+        run: >-
+          python3 scripts/test_report.py
+          --report-dir .internal-docs/migration-reports/ci
+          --name java8-verification --
+          ./gradlew --no-daemon --console=plain clean build testJavadoc
+
+      - name: Check the signed publication lifecycle locally
+        run: >-
+          python3 scripts/test_report.py
+          --report-dir .internal-docs/migration-reports/ci
+          --name publication-regressions --
+          python3 .github/scripts/test-central-publishing.py
+          --report-dir .internal-docs/migration-reports/ci/publication-cases
 
       - name: Check whitespace
         env:
@@ -47,3 +59,13 @@ jobs:
           else
             git show --format= --check HEAD
           fi
+
+      - name: Preserve verification reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: java8-verification-${{ github.sha }}
+          path: .internal-docs/migration-reports/ci/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

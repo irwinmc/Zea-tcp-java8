@@ -4,6 +4,33 @@ This fork records upstream synchronization and behavior-preserving Java 8 migrat
 Inherited release history below describes the Java 21 baseline, not independent
 features introduced by the port.
 
+## 0.8.6 (Java 8 Port, 2026-11-13)
+
+### Changes
+
+- Synchronize the Java 21 0.8.6 fixes for empty-string decoding, fail-closed secure
+  random identity generation and bounded HTTP filesystem offloading.
+- Preserve upstream response FIFO, read backpressure, file reservations/deadlines,
+  late-result cleanup and actual filesystem-worker termination using Java 8 APIs.
+- Publish only from the matching published GitHub Release tag; remove branch-based
+  manual publication and retain individual CI/publication test reports.
+- Retain the Java 8 dependency set and all inherited compatibility contracts.
+
+### Migration from 0.8.5
+
+Update the dependency to `com.akakata:zea-tcp-java8:0.8.6`. Empty strings now decode
+as `""`; an unavailable secure-random provider fails explicitly. Standalone users
+close their `HttpFileTransfers` owner; the context handles normal ownership.
+
+### Validation
+
+All 359 Java 8 cases and strict production/private and test JavaDoc pass, including
+14 synchronized upstream regressions and all 25 port equivalence cases. Framework
+and test classes remain Java 8 bytecode. Local signed-publication checks cover the
+actual Gradle publication script and an isolated loopback Portal fixture.
+
+Maven coordinates: `com.akakata:zea-tcp-java8:0.8.6`.
+
 ## 0.8.5 (Java 8 Port, 2026-11-13)
 
 - Publish `com.akakata:zea-tcp-java8:0.8.5` to Maven Central without changing the synchronized
