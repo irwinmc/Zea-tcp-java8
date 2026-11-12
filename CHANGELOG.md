@@ -4,9 +4,9 @@ This fork records upstream synchronization and behavior-preserving Java 8 migrat
 Inherited release history below describes the Java 21 baseline, not independent
 features introduced by the port.
 
-## 0.8.5 (Java 8 Port, Publication Pending)
+## 0.8.5 (Java 8 Port, 2026-11-13)
 
-- Prepare `com.akakata:zea-tcp-java8:0.8.5` without changing the synchronized
+- Publish `com.akakata:zea-tcp-java8:0.8.5` to Maven Central without changing the synchronized
   framework sources, configuration, dependencies or behavior.
 - Add Gradle Maven publication and signing, source/JavaDoc archives, Java 8 module
   metadata and four checksum algorithms. Preserve upstream license, developer
@@ -16,6 +16,8 @@ features introduced by the port.
   plus matching public repository artifacts before reporting release completion.
 - Preserve individual reports for the inherited and compatibility tests and the
   publication regressions. Keep credentials and maintainer runbooks Git-ignored.
+- Verify all 345 Java 8 regression cases and 29 publishing cases, strict main/test
+  JavaDoc, all five artifact signatures and matching public repository downloads.
 
 ## 0.8.4 (Unreleased Java 8 Port)
 

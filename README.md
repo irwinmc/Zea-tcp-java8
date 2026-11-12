@@ -29,8 +29,17 @@ private members and test sources; warnings and errors fail the build.
 
 The library JAR is `build/libs/zea-tcp-java8-0.8.5.jar`; source and JavaDoc archives
 are produced alongside it. It contains no executable application entry point and
-does not bundle its runtime dependencies. The intended coordinates are
-`com.akakata:zea-tcp-java8:0.8.5`; publication is pending verification and Central acceptance.
+does not bundle its runtime dependencies. The published coordinates are
+`com.akakata:zea-tcp-java8:0.8.5`, available from
+[Maven Central](https://central.sonatype.com/artifact/com.akakata/zea-tcp-java8/0.8.5).
+
+In a Gradle application with `mavenCentral()` configured:
+
+```groovy
+dependencies {
+    implementation 'com.akakata:zea-tcp-java8:0.8.5'
+}
+```
 
 Test reports are under `build/reports/tests/test/` and `build/test-results/test/`.
 Use `scripts/test_report.py` to retain an aggregate result and individual case reports:

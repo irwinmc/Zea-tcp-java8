@@ -57,6 +57,12 @@ JavaDoc. The Java 8 port preserves those cases and adds **25** compatibility cas
 Every verification run, failure and individual JUnit outcome is retained locally;
 configuration-only checks are never presented as compatibility acceptance.
 
+Release 0.8.5 also passes all **345** cases and strict main/test JavaDoc on
+Temurin **8.0.512+9**, Linux x86-64. All **29** publishing regressions pass.
+Maven Central confirms `PUBLISHED`; the five published artifacts and their
+signatures match the verified release bytes. Independent downloads confirm all
+247 library classes use Java 8 bytecode and all five signatures are valid.
+
 Run the complete acceptance command with a Java 8 toolchain:
 
 ```bash
