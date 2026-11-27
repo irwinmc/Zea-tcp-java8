@@ -4,6 +4,20 @@ This fork records upstream synchronization and behavior-preserving Java 8 migrat
 Inherited release history below describes the Java 21 baseline, not independent
 features introduced by the port.
 
+## 0.8.7 (Java 8 Port, 2026-11-27)
+
+Version 0.8.7 adopts the upstream Netty update and refreshes dependencies for Java 8.
+
+### Changes
+
+- Align Netty with upstream at 4.2.21.Final. Update Jackson's Java 8-compatible
+  modules to 2.23.0 and the test stack to JUnit Jupiter 5.14.4 and Platform 1.14.4.
+
+### Migration from 0.8.6
+
+Update the dependency to `com.akakata:zea-tcp-java8:0.8.7`. Align any application
+overrides of Netty and Jackson with the versions above.
+
 ## 0.8.6 (Java 8 Port, 2026-11-13)
 
 ### Changes

@@ -6,8 +6,8 @@ unrelated user work and follow the user's explicitly requested migration stage.
 ## Porting and Publication Only
 
 - This project is a Java 8 port of Zea TCP Transport. The behavior baseline is
-  upstream version 0.8.6, commit `64b474694bd98bcad3403ac27e00a0794f4b84a7`.
-  The fork version is 0.8.6. User-requested upstream synchronization imports
+  upstream version 0.8.7, commit `b6a7c78108fc10f0483f1bdfbbcae3b12640c010`.
+  The fork version is 0.8.7. User-requested upstream synchronization imports
   that baseline; independent functionality changes remain prohibited.
 - This fork permits only behavior-preserving rewrites and migration work:
   Java 8 syntax, equivalent JDK/library API adaptations, Gradle build/publication metadata,

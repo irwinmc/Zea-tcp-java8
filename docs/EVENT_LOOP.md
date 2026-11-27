@@ -1,12 +1,11 @@
 # Event Loops, Dispatch and Lifecycle
 
-> This Java 8 port follows the synchronized upstream 0.8.5 contracts.
-> Fork version: 0.8.5. See [migration status](../MIGRATION.md) and the
-> [Gradle build instructions](../README.md#build).
+> This Java 8 port follows the synchronized upstream contracts.
+> See [migration status](../MIGRATION.md) and [Gradle build instructions](../README.md#build).
 
-This guide describes Zea TCP Transport 0.8.5 with Netty 4.2.19.Final and Java 8,
-including application injection, security and resource policies. See
-[lifecycle](LIFECYCLE.md) for shutdown and completion contracts.
+This guide describes the port's event and resource policies on Java 8.
+See [dependency versions](../README.md#compatibility-dependencies) for the pinned
+Netty version and [lifecycle](LIFECYCLE.md) for shutdown and completion contracts.
 See [configuration](CONFIGURATION.md) for consumed properties and wire formats.
 
 ## Resource Layout

@@ -46,8 +46,8 @@ publishing {
                 properties = [
                     'zea.java8.port': 'true',
                     'zea.upstream.url': upstreamUrl,
-                    'zea.upstream.version': '0.8.6',
-                    'zea.upstream.commit': '64b474694bd98bcad3403ac27e00a0794f4b84a7'
+                    'zea.upstream.version': '0.8.7',
+                    'zea.upstream.commit': 'b6a7c78108fc10f0483f1bdfbbcae3b12640c010'
                 ]
             }
         }

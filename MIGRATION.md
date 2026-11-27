@@ -2,9 +2,9 @@
 
 ## Baseline and Scope
 
-The fork release version is **0.8.6**. Its synchronized behavior baseline is
-Zea TCP Transport **0.8.6**, commit
-`64b474694bd98bcad3403ac27e00a0794f4b84a7`.
+The fork release version is **0.8.7**. Its synchronized upstream baseline is
+Zea TCP Transport **0.8.7**, commit
+`b6a7c78108fc10f0483f1bdfbbcae3b12640c010`.
 
 All upstream source, configuration, regression and guide changes since the initial
 copy were inspected and synchronized before compatibility rewrites. Gradle build
@@ -29,7 +29,14 @@ as upstream. Existing path/blank-string adaptations retain their equivalent beha
 The complete inherited and port-compatibility suites remain active. Final acceptance
 passes 359 cases on a real Java 8 runtime, including 14 synchronized upstream
 regressions, plus strict main/private and test JavaDoc. All 252 framework classes
-and 136 test classes use Java 8 bytecode; dependencies remain unchanged.
+and 136 test classes use Java 8 bytecode in the 0.8.6 release.
+
+### Dependency Updates for 0.8.7
+
+Release 0.8.7 uses Netty 4.2.21.Final, Jackson 2.23.0, and JUnit Jupiter
+5.14.4 with Platform 1.14.4. Dagger runtime and processor versions stay aligned
+at 2.51.1 for Java 8 builds. Newer Dagger processors load Java 11 bytecode from
+their SPI dependency.
 
 ## Completed Adaptation
 

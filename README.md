@@ -1,7 +1,7 @@
 # Zea TCP for Java 8
 
 Zea TCP for Java 8 is a Gradle port of Zea TCP Transport. The fork version is
-**0.8.6**, with the synchronized Java 21 upstream **0.8.6** as its behavior baseline.
+**0.8.7**, with the synchronized Java 21 upstream **0.8.7** as its baseline.
 This version contains only upstream synchronization and equivalent compatibility
 rewrites; it introduces no independent framework functionality.
 
@@ -27,17 +27,17 @@ Compilation, test JVMs and JavaDoc use the Java 8 toolchain. Tests include 334
 inherited regression cases plus 25 Java 8 equivalence cases. JavaDoc includes
 private members and test sources; warnings and errors fail the build.
 
-The library JAR is `build/libs/zea-tcp-java8-0.8.6.jar`; source and JavaDoc archives
+The library JAR is `build/libs/zea-tcp-java8-0.8.7.jar`. Source and JavaDoc archives
 are produced alongside it. It contains no executable application entry point and
 does not bundle its runtime dependencies. The published coordinates are
-`com.akakata:zea-tcp-java8:0.8.6`, available from
-[Maven Central](https://central.sonatype.com/artifact/com.akakata/zea-tcp-java8/0.8.6).
+`com.akakata:zea-tcp-java8:0.8.7`, available from
+[Maven Central](https://central.sonatype.com/artifact/com.akakata/zea-tcp-java8/0.8.7).
 
 In a Gradle application with `mavenCentral()` configured:
 
 ```groovy
 dependencies {
-    implementation 'com.akakata:zea-tcp-java8:0.8.6'
+    implementation 'com.akakata:zea-tcp-java8:0.8.7'
 }
 ```
 
@@ -71,15 +71,15 @@ retain their inherited contracts.
 
 | Dependency | Pinned version |
 | --- | --- |
-| Netty | 4.2.19.Final |
-| Jackson core/databind/YAML and Java 8/time modules | 2.22.3 |
+| Netty | 4.2.21.Final |
+| Jackson core/databind/YAML and Java 8/time modules | 2.23.0 |
 | Dagger runtime and annotation processor | 2.51.1 |
 | javax.inject | 1 |
 | Caffeine | 2.9.3 |
 | SLF4J | 2.0.20 |
 | Logback | 1.3.16 |
 | Logstash Logback Encoder | 7.4 |
-| JUnit Jupiter / Platform | 5.12.2 / 1.12.2 |
+| JUnit Jupiter / Platform | 5.14.4 / 1.14.4 |
 
 `build.gradle` is authoritative. JSON adapters retain the synchronized defaults,
 including property naming/order, trailing-token checks, null primitive rejection,
