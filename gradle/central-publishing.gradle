@@ -5,6 +5,7 @@ import groovy.json.JsonSlurper
 def releaseGroup = project.group.toString()
 def releaseArtifact = 'zea-tcp-java8'
 def releaseVersion = project.version.toString()
+def snapshot = releaseVersion.endsWith('-SNAPSHOT')
 def versionPath = "${releaseGroup.replace('.', '/')}/${releaseArtifact}/${releaseVersion}"
 def staging = layout.buildDirectory.dir('central/staging')
 def bundle = layout.buildDirectory.file('central/central-bundle.zip')
@@ -41,13 +42,13 @@ publishing {
                     connection = "scm:git:${projectUrl}.git"
                     developerConnection = 'scm:git:ssh://git@github.com/irwinmc/Zea-tcp-java8.git'
                     url = projectUrl
-                    tag = "v${releaseVersion}"
+                    tag = snapshot ? 'HEAD' : "v${releaseVersion}"
                 }
                 properties = [
                     'zea.java8.port': 'true',
                     'zea.upstream.url': upstreamUrl,
-                    'zea.upstream.version': '0.8.7',
-                    'zea.upstream.commit': 'b6a7c78108fc10f0483f1bdfbbcae3b12640c010'
+                    'zea.upstream.version': releaseVersion,
+                    (snapshot ? 'zea.upstream.base-commit' : 'zea.upstream.commit'): '6a9394ffd55e54394956f90ad2a3768e66253d4c'
                 ]
             }
         }
@@ -81,7 +82,9 @@ signing {
     } else {
         useGpgCmd()
     }
-    sign publishing.publications.mavenJava
+    if (!snapshot) {
+        sign publishing.publications.mavenJava
+    }
 }
 
 tasks.register('validateCentralVersion') {

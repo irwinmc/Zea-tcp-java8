@@ -114,12 +114,13 @@ public final class ProtocolModule {
     /**
      * Provides the web socket event encoder dependency for the application component.
      *
+     * @param configuration the framework properties
      * @return the web socket event encoder instance
      */
     @Provides
     @Singleton
-    static WebSocketEventEncoder provideWebSocketEventEncoder() {
-        return new WebSocketEventEncoder();
+    static WebSocketEventEncoder provideWebSocketEventEncoder(ConfigurationManager configuration) {
+        return new WebSocketEventEncoder(configuration);
     }
 
     /**

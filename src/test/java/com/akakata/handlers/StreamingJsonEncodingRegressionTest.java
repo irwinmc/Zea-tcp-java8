@@ -1,5 +1,6 @@
 package com.akakata.handlers;
 
+import com.akakata.context.ConfigurationManager;
 import com.akakata.event.Event;
 import com.akakata.event.Events;
 import com.akakata.event.impl.SharedNetworkEvent;
@@ -10,6 +11,7 @@ import com.akakata.metrics.FlowControlMetrics;
 import io.netty.buffer.*;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.EncoderException;
+import io.netty.handler.codec.LengthFieldPrepender;
 import io.netty.handler.codec.TooLongFrameException;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.util.ReferenceCountUtil;
@@ -134,6 +136,148 @@ class StreamingJsonEncodingRegressionTest {
         } finally {
             channel.finishAndReleaseAll();
             allocator.releaseRemaining();
+        }
+    }
+
+    /**
+     * Writes the unsigned TCP prefix at its exact limit and rejects one additional byte.
+     */
+    @Test
+    void tcpBoundaryIncludesTheApplicationHeaderButExcludesTheTransportPrefix() {
+        EmbeddedChannel tcp = new EmbeddedChannel(new LengthFieldPrepender(2), new JsonEncoder());
+        try {
+            assertTrue(tcp.writeOutbound(Events.networkEvent(com.akakata.compat.Java8.repeat("x", 65528))));
+            ByteBuf prefix = tcp.readOutbound();
+            ByteBuf frame = tcp.readOutbound();
+            try {
+                assertEquals(65535, prefix.readUnsignedShort());
+                assertEquals(65535, frame.readableBytes());
+                assertEquals(Events.NETWORK_MESSAGE, frame.readUnsignedByte());
+                assertEquals(65530, frame.readInt());
+            } finally {
+                prefix.release();
+                frame.release();
+            }
+            assertInstanceOf(TooLongFrameException.class, assertThrows(EncoderException.class,
+                    () -> tcp.writeOutbound(Events.networkEvent(com.akakata.compat.Java8.repeat("x", 65529)))).getCause());
+            assertNull(tcp.readOutbound());
+        } finally {
+            tcp.finishAndReleaseAll();
+        }
+    }
+
+    /**
+     * Checks independent bounds and ownership in both shared-recipient orders.
+     *
+     * @param tcpFirst whether the smaller recipient sees the event before it has been cached
+     * @throws Exception if the configuration fixture cannot be read
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void configuredWebSocketSendsLargeSharedFrameWithoutBypassingTcpLimit(boolean tcpFirst) throws Exception {
+        ConfigurationManager config = new ConfigurationManager("conf-flow-control.properties");
+        EmbeddedChannel ws = new EmbeddedChannel(new WebSocketEventEncoder(config));
+        EmbeddedChannel tcp = new EmbeddedChannel(new JsonEncoder());
+        TrackingAllocator allocator = new TrackingAllocator();
+        ws.config().setAllocator(allocator);
+        tcp.config().setAllocator(allocator);
+        SharedNetworkEvent shared = new SharedNetworkEvent(Events.networkEvent(com.akakata.compat.Java8.repeat("x", 70000)));
+        try {
+            if (tcpFirst) {
+                assertInstanceOf(TooLongFrameException.class,
+                        assertThrows(EncoderException.class, () -> tcp.writeOutbound(shared)).getCause());
+                allocator.assertReleased();
+            }
+            assertTrue(ws.writeOutbound(shared));
+            BinaryWebSocketFrame frame = ws.readOutbound();
+            try {
+                assertEquals(70007, frame.content().readableBytes());
+                assertEquals(Events.NETWORK_MESSAGE, frame.content().readUnsignedByte());
+                assertEquals(70002, frame.content().readInt());
+                assertInstanceOf(TooLongFrameException.class,
+                        assertThrows(EncoderException.class, () -> tcp.writeOutbound(shared)).getCause());
+            } finally {
+                frame.release();
+            }
+            assertInstanceOf(TooLongFrameException.class, assertThrows(EncoderException.class,
+                    () -> ws.writeOutbound(Events.networkEvent(com.akakata.compat.Java8.repeat("x", 70001)))).getCause());
+            assertNull(tcp.readOutbound());
+            assertNull(ws.readOutbound());
+        } finally {
+            shared.releaseOwner();
+            ws.finishAndReleaseAll();
+            tcp.finishAndReleaseAll();
+        }
+        allocator.assertReleased();
+    }
+
+    /**
+     * Validates configured limits and checks that the smallest accepted limit bounds native growth.
+     *
+     * @throws Exception if the configuration fixture cannot be read
+     */
+    @Test
+    void configuredLimitIsStrictAndCanBeSmallerThanInitialAllocation() throws Exception {
+        ConfigurationManager config = new ConfigurationManager("conf-flow-control.properties");
+        String key = "web.socket.maximum.outbound.frame.bytes";
+        for (String invalid : new String[]{"", "two", "0", "-1", "2147483648"}) {
+            config.getProperties().setProperty(key, invalid);
+            assertTrue(assertThrows(IllegalArgumentException.class,
+                    () -> new WebSocketEventEncoder(config)).getMessage().contains(key));
+        }
+        config.getProperties().setProperty(key, "1");
+        EmbeddedChannel ws = new EmbeddedChannel(new WebSocketEventEncoder(config));
+        try {
+            assertTrue(ws.writeOutbound(Events.event(null, Events.DISCONNECT)));
+            BinaryWebSocketFrame frame = ws.readOutbound();
+            try {
+                assertEquals(1, frame.content().readableBytes());
+                assertEquals(Events.DISCONNECT, frame.content().readUnsignedByte());
+            } finally {
+                frame.release();
+            }
+            assertInstanceOf(TooLongFrameException.class, assertThrows(EncoderException.class,
+                    () -> ws.writeOutbound(Events.networkEvent("a"))).getCause());
+        } finally {
+            ws.finishAndReleaseAll();
+        }
+    }
+
+    /**
+     * Keeps default and custom JSON serializations separate within one shared event.
+     *
+     * @throws Exception if the configuration fixture cannot be read
+     */
+    @Test
+    void sharedEventCachesEachPayloadFormatIndependently() throws Exception {
+        ConfigurationManager config = new ConfigurationManager("conf-flow-control.properties");
+        java.util.concurrent.atomic.AtomicInteger writes = new java.util.concurrent.atomic.AtomicInteger();
+        EmbeddedChannel ws = new EmbeddedChannel(new WebSocketEventEncoder(config, (out, source) -> {
+            writes.incrementAndGet();
+            out.write('1');
+        }));
+        SharedNetworkEvent shared = new SharedNetworkEvent(Events.networkEvent("original"));
+        try {
+            for (int recipient = 0; recipient < 2; recipient++) {
+                assertTrue(ws.writeOutbound(shared));
+                BinaryWebSocketFrame frame = ws.readOutbound();
+                try {
+                    assertEquals(1, frame.content().getInt(1));
+                    assertEquals('1', frame.content().getByte(5));
+                } finally {
+                    frame.release();
+                }
+            }
+            ByteBuf tcp = EventFrames.json(ws.alloc(), shared);
+            try {
+                assertEquals(10, tcp.getInt(1));
+            } finally {
+                tcp.release();
+            }
+            assertEquals(1, writes.get());
+        } finally {
+            shared.releaseOwner();
+            ws.finishAndReleaseAll();
         }
     }
 

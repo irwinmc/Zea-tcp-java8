@@ -88,6 +88,7 @@ The **bundled value** is the value in this checkout's default resource.
 | `business.blocking.queue.bytes` | `67108864` | `67108864` | Positive declared retained bytes for queued and running operations |
 | `business.blocking.shutdown.millis` | `5000` | `5000` | Standalone worker close wait; zero requests shutdown only, positive expiry throws |
 | `protocol.maximum.frame.bytes` | `65535` | `65535` | Inbound application frame bytes, between 8 and 65535; excludes transport headers |
+| `web.socket.maximum.outbound.frame.bytes` | `65535` | `65535` | Maximum outbound WebSocket application bytes (1..2147483647), including opcode and optional four-byte JSON length |
 
 These values are read by
 [ServerContext](../src/main/java/com/akakata/context/ServerContext.java),
@@ -180,11 +181,13 @@ business.blocking.shutdown.millis=5000
 
 # Protocol Frame Limits
 protocol.maximum.frame.bytes=65535
+web.socket.maximum.outbound.frame.bytes=65535
 ```
 
 These limits are consumed by the default Dagger service and TCP/WebSocket login
 providers. Nonpositive count/byte/login budgets, queue capacities below 16, negative read-idle
-durations and frame limits outside 8..65535 fail initialization. Malformed numeric and boolean strings fail initialization instead of substituting defaults.
+durations and inbound frame limits outside 8..65535 fail initialization.
+The outbound WebSocket limit accepts 1..2147483647 bytes. Malformed numeric and boolean strings fail initialization instead of substituting defaults.
 Budgets are not automatically resized or reloaded. Session budgets are fixed
 before the first shared dispatcher or session is created. Starting another context
 with conflicting live session budgets fails; complete shared shutdown is terminal.
@@ -398,8 +401,10 @@ application frame to 65,535 bytes. The standalone three-argument login initializ
 retains its 1,024-byte total login-frame default; the configured graph supplies the
 explicit limit.
 
-JSON output streams directly into a native application frame with a maximum
-capacity of 65,535 bytes. It does not create a whole-payload heap byte array.
+TCP JSON output streams directly into a native application frame with a maximum
+capacity of 65,535 bytes. WebSocket JSON uses its own outbound limit and grows
+on demand. Both stream without allocating a whole-payload heap byte array.
+Shared sends enforce the limit for each recipient, even on a cache hit.
 The encoder patches the inner payload length after successful serialization and
 releases partial output on serialization failure or size overflow. Native capacity
 may grow while encoding and can exceed readable bytes within this frame ceiling;

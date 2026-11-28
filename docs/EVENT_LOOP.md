@@ -331,7 +331,9 @@ reference and retains an additional reference for each accepted delivery.
 
 Events and payloads are not deep-copied. Do not mutate an event after publication.
 Multi-recipient selections and broadcasts create one `SharedNetworkEvent` lease and lazily cache
-one application frame per wire format. TCP and WebSocket JSON share that frame.
+one application frame per wire format. TCP and WebSocket share the default JSON format. Each recipient enforces
+its own frame limit. WebSocket encoders using the same custom JSON writer
+share a separate frame for that format.
 Recipient buffers are retained read-only duplicates with independent indices.
 Failed or cancelled recipients cannot release another recipient's source or frame;
 the lease releases its original source and cached buffers after the last owner exits.

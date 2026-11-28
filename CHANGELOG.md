@@ -4,6 +4,11 @@ This fork records upstream synchronization and behavior-preserving Java 8 migrat
 Inherited release history below describes the Java 21 baseline, not independent
 features introduced by the port.
 
+## 0.8.8 (Java 8 Port, 2026-11-28)
+
+Synchronize the Java 8 port with the upstream WebSocket outbound frame limit
+and optional application JSON writer.
+
 ## 0.8.7 (Java 8 Port, 2026-11-27)
 
 Version 0.8.7 adopts the upstream Netty update and refreshes dependencies for Java 8.

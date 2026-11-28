@@ -56,12 +56,25 @@ public final class SharedNetworkEvent extends DefaultNetworkEvent {
      * @return a caller-owned read-only duplicate with independent indices
      */
     public ByteBuf encodedFrame(String format, Supplier<ByteBuf> encoder) {
+        return encodedFrame((Object) format, encoder);
+    }
+
+    /**
+     * Shares an encoding among recipients with the same application wire format.
+     *
+     * @param format stable key identifying the wire format or custom payload writer
+     * @param encoder supplier invoked on a cache miss
+     * @return caller-owned retained duplicate
+     */
+    public ByteBuf encodedFrame(Object format, Supplier<ByteBuf> encoder) {
         synchronized (lease) {
             ByteBuf frame = lease.frames.get(format);
             if (frame == null) {
                 frame = encoder.get().asReadOnly();
                 lease.frames.put(format, frame);
-            } else FlowControlMetrics.ENCODING_REUSES.increment();
+            } else {
+                FlowControlMetrics.ENCODING_REUSES.increment();
+            }
             return frame.retainedDuplicate();
         }
     }
@@ -84,7 +97,7 @@ public final class SharedNetworkEvent extends DefaultNetworkEvent {
         /**
          * Canonical read-only application frames, guarded by this lease.
          */
-        private final Map<String, ByteBuf> frames = new HashMap<>();
+        private final Map<Object, ByteBuf> frames = new HashMap<>();
 
         /**
          * Captures the fan-out payload owner.

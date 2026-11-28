@@ -11,7 +11,9 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.util.Objects;
 
 /**
@@ -28,7 +30,12 @@ public final class EventFrames {
     /**
      * Largest application frame representable by the two-byte transport prefix.
      */
-    private static final int MAXIMUM_FRAME_BYTES = 65_535;
+    static final int TCP_MAXIMUM_FRAME_BYTES = 65_535;
+
+    /**
+     * Default wire format shared by the TCP and WebSocket JSON encoders.
+     */
+    static final JsonPayloadWriter JSON_WRITER = MAPPER::writeValue;
 
     /**
      * Prevents construction of this encoding utility.
@@ -44,11 +51,30 @@ public final class EventFrames {
      * @return caller-owned application frame excluding transport headers
      */
     public static ByteBuf json(ByteBufAllocator allocator, Event event) {
-        SharedNetworkEvent java8Pattern29;
-        if (((java8Pattern29 = com.akakata.compat.Java8.cast(event, SharedNetworkEvent.class)) != null)) {
-            return java8Pattern29.encodedFrame("JSON", () -> encodeJson(allocator, event));
+        return json(allocator, event, TCP_MAXIMUM_FRAME_BYTES, JSON_WRITER);
+    }
+
+    /**
+     * Returns an owned frame within the recipient's limit, including on a cache hit.
+     *
+     * @param allocator the recipient's allocator
+     * @param event the outbound event
+     * @param maximumFrameBytes the complete application frame limit
+     * @param writer the JSON wire format used by this recipient
+     * @return caller-owned application frame
+     */
+    static ByteBuf json(ByteBufAllocator allocator, Event event, int maximumFrameBytes, JsonPayloadWriter writer) {
+        if (event instanceof SharedNetworkEvent) {
+            SharedNetworkEvent shared = (SharedNetworkEvent) event;
+            Object format = writer == JSON_WRITER ? "JSON" : writer;
+            ByteBuf frame = shared.encodedFrame(format, () -> encodeJson(allocator, event, maximumFrameBytes, writer));
+            if (frame.readableBytes() > maximumFrameBytes) {
+                frame.release();
+                throw new TooLongFrameException("Application frame exceeds " + maximumFrameBytes + " bytes");
+            }
+            return frame;
         }
-        return encodeJson(allocator, event);
+        return encodeJson(allocator, event, maximumFrameBytes, writer);
     }
 
     /**
@@ -56,18 +82,26 @@ public final class EventFrames {
      *
      * @param allocator the native allocator
      * @param event the source event
+     * @param maximumFrameBytes the complete application frame limit
+     * @param writer the serializer for this wire format
      * @return newly allocated application frame
      */
-    private static ByteBuf encodeJson(ByteBufAllocator allocator, Event event) {
+    private static ByteBuf encodeJson(ByteBufAllocator allocator, Event event, int maximumFrameBytes,
+                                      JsonPayloadWriter writer) {
         Object source = event.getSource();
-        ByteBuf frame = allocator.buffer(source == null ? 1 : 256, MAXIMUM_FRAME_BYTES);
+        ByteBuf frame = allocator.buffer(source == null ? 1 : Math.min(256, maximumFrameBytes), maximumFrameBytes);
         FrameOutputStream output = null;
         try {
             frame.writeByte(event.getType());
             if (source != null) {
-                frame.writeInt(0);
                 output = new FrameOutputStream(frame);
-                com.akakata.compat.Json8.writeValue(MAPPER, output, source);
+                output.checkRemaining(Integer.BYTES);
+                frame.writeInt(0);
+                try {
+                    writer.write(output, source);
+                } catch (IOException failure) {
+                    throw new UncheckedIOException(failure);
+                }
                 if (output.overflow != null) {
                     throw output.overflow;
                 }
@@ -139,7 +173,7 @@ public final class EventFrames {
      * @throws TooLongFrameException if the frame exceeds 65535 bytes
      */
     private static void validateSize(int bytes) {
-        if (bytes < 0 || bytes > MAXIMUM_FRAME_BYTES) {
+        if (bytes < 0 || bytes > TCP_MAXIMUM_FRAME_BYTES) {
             throw new TooLongFrameException("Application frame exceeds 65535 bytes");
         }
     }
@@ -192,11 +226,11 @@ public final class EventFrames {
          * Rejects a write before native growth can exceed the protocol frame budget.
          *
          * @param length the nonnegative number of bytes to append
-         * @throws TooLongFrameException if the complete frame would exceed 65535 bytes
+         * @throws TooLongFrameException if the complete frame would exceed its configured limit
          */
         private void checkRemaining(int length) {
-            if (length > MAXIMUM_FRAME_BYTES - frame.writerIndex()) {
-                overflow = new TooLongFrameException("Application frame exceeds 65535 bytes");
+            if (length > frame.maxCapacity() - frame.writerIndex()) {
+                overflow = new TooLongFrameException("Application frame exceeds " + frame.maxCapacity() + " bytes");
                 throw overflow;
             }
         }

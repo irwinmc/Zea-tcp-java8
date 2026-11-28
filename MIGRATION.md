@@ -2,9 +2,9 @@
 
 ## Baseline and Scope
 
-The fork release version is **0.8.7**. Its synchronized upstream baseline is
-Zea TCP Transport **0.8.7**, commit
-`b6a7c78108fc10f0483f1bdfbbcae3b12640c010`.
+Version **0.8.8** synchronizes the WebSocket outbound frame limit and JSON writer
+from upstream Zea TCP Transport **0.8.8**, commit
+`6a9394ffd55e54394956f90ad2a3768e66253d4c`.
 
 All upstream source, configuration, regression and guide changes since the initial
 copy were inspected and synchronized before compatibility rewrites. Gradle build
